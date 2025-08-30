@@ -1,0 +1,201 @@
+--[[
+Roblox – Station-2 (Train Station) Auto-Builder + Touchdown mode
+Autor: ChatGPT
+Uso: Pega TODO este script en un Script dentro de ServerScriptService y dale Play.
+
+Qué crea:
+- Mapa base tipo Station‑2: tren central, puente superior frágil, rail superior, dos bases, salas de spawn, barreras eléctricas, zonas de gol.
+- Modo Touchdown completo: Fumbi (pelota), recogida, entrega, puntuación, reinicio, líder‑stats.
+- Asignación de equipos (Red / Blue) automática.
+
+Notas:
+- El mapa es una aproximación jugable pensada para servir como base. Ajusta medidas/colores a tu gusto.
+- No usa assets externos.
+]]
+
+-- =========================
+-- \u{1F6E0}\u{FE0F} Helpers
+-- =========================
+local Players = game:GetService("Players")
+local Teams = game:GetService("Teams")
+local RunService = game:GetService("RunService")
+local Debris = game:GetService("Debris")
+
+local function createPart(props)
+	local p = Instance.new("Part")
+	p.Size = props.Size or Vector3.new(4,1,4)
+	p.CFrame = props.CFrame or CFrame.new()
+	p.Anchored = props.Anchored ~= false
+	p.CanCollide = props.CanCollide ~= false
+	p.Transparency = props.Transparency or 0
+	p.Material = props.Material or Enum.Material.Metal
+	if props.Color then p.Color = props.Color end
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Name = props.Name or "Part"
+	p.Parent = props.Parent
+	return p
+end
+
+local function tag(part, name)
+	local a = Instance.new("StringValue")
+	a.Name = name
+	a.Parent = part
+	return a
+end
+
+-- =========================
+-- \u{1F535}\u{1F534} Teams & leaderstats
+-- =========================
+if not Teams:FindFirstChild("Red") then
+	local red = Instance.new("Team")
+	red.Name = "Red"
+	red.TeamColor = BrickColor.new("Bright red")
+	red.AutoAssignable = false
+	red.Parent = Teams
+end
+if not Teams:FindFirstChild("Blue") then
+	local blue = Instance.new("Team")
+	blue.Name = "Blue"
+	blue.TeamColor = BrickColor.new("Bright blue")
+	blue.AutoAssignable = false
+	blue.Parent = Teams
+end
+
+local function ensureLeaderstats(plr)
+	local ls = plr:FindFirstChild("leaderstats")
+	if not ls then
+		ls = Instance.new("Folder")
+		ls.Name = "leaderstats"
+		ls.Parent = plr
+	end
+	local score = ls:FindFirstChild("Score") or Instance.new("IntValue")
+	score.Name = "Score"
+	score.Parent = ls
+	local td = ls:FindFirstChild("Touchdowns") or Instance.new("IntValue")
+	td.Name = "Touchdowns"
+	td.Parent = ls
+end
+
+local teamSwitcher = true
+Players.PlayerAdded:Connect(function(plr)
+	ensureLeaderstats(plr)
+	-- asignación alterna
+	plr.Team = teamSwitcher and Teams.Red or Teams.Blue
+	teamSwitcher = not teamSwitcher
+end)
+
+-- =========================
+-- \u{1F5FA}\u{FE0F} Station‑2 layout (approx)
+-- =========================
+local MAP = Instance.new("Folder")
+MAP.Name = "Station2_Map"
+MAP.Parent = workspace
+
+local ORIGIN = CFrame.new(0,0,0)
+
+-- Suelo principal
+createPart({Name="Floor", Size=Vector3.new(220,1,60), CFrame=ORIGIN * CFrame.new(0,0,0), Material=Enum.Material.Concrete, Color=Color3.fromRGB(50,50,50), Parent=MAP})
+
+-- Paredes laterales bajas
+createPart({Name="WallL", Size=Vector3.new(220,12,1), CFrame=ORIGIN * CFrame.new(0,6,-31), Material=Enum.Material.Metal, Color=Color3.fromRGB(80,80,80), Parent=MAP})
+createPart({Name="WallR", Size=Vector3.new(220,12,1), CFrame=ORIGIN * CFrame.new(0,6,31), Material=Enum.Material.Metal, Color=Color3.fromRGB(80,80,80), Parent=MAP})
+
+-- Tren central sobre la vía
+local TRAIN = Instance.new("Folder"); TRAIN.Name = "Train"; TRAIN.Parent = MAP
+createPart({Name="Track", Size=Vector3.new(180,1,8), CFrame=ORIGIN * CFrame.new(0,1.01,0), Material=Enum.Material.Metal, Color=Color3.fromRGB(30,30,30), Parent=TRAIN})
+local trainBody = createPart({Name="TrainBody", Size=Vector3.new(100,6,10), CFrame=ORIGIN * CFrame.new(0,4,0), Material=Enum.Material.Metal, Color=Color3.fromRGB(100,100,100), Parent=TRAIN})
+createPart({Name="Roof", Size=Vector3.new(100,1,10.5), CFrame=trainBody.CFrame * CFrame.new(0,3.5,0), Material=Enum.Material.Metal, Color=Color3.fromRGB(120,120,120), Parent=TRAIN})
+
+-- Bases / Salas de spawn (plataformas circulares + salas seguras)
+local BASE_OFFSET = 90 -- distancia desde el centro
+local function createBase(name, xDir, teamColor)
+	local folder = Instance.new("Folder"); folder.Name = name; folder.Parent = MAP
+	-- plataforma base
+	local base = Instance.new("Part")
+	base.Shape = Enum.PartType.Cylinder
+	base.Size = Vector3.new(28,2,28)
+	base.CFrame = ORIGIN * CFrame.new(xDir*BASE_OFFSET,1,0) * CFrame.Angles(0,0,math.rad(90))
+	base.Anchored = true
+	base.Material = Enum.Material.Metal
+	base.Color = teamColor
+	base.Name = name.."_Pad"
+	base.Parent = folder
+	-- sala segura (pared semicircular de barreras)
+	local ringCount = 6
+	for i=1,ringCount do
+		local ang = (i/ringCount)*math.pi*1.4 + math.rad(20)
+		local pos = Vector3.new(xDir*BASE_OFFSET + math.cos(ang)*14, 6, math.sin(ang)*14)
+		local barrier = createPart({Name="ElectricBarrier", Size=Vector3.new(1,12,6), CFrame=CFrame.new(pos), Material=Enum.Material.Neon, Color=Color3.fromRGB(0,255,255), Parent=folder})
+		barrier.Transparency = 0.35
+		-- daño a enemigos
+		local s = Instance.new("Script")
+		s.Source = [[
+			local barrier = script.Parent
+			barrier.Touched:Connect(function(hit)
+				local hum = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
+				local plr = hum and game.Players:GetPlayerFromCharacter(hit.Parent)
+				if hum and plr and plr.Team then
+					local isFriendly = (barrier:GetAttribute("Team") == plr.Team.Name)
+					if not isFriendly then hum:TakeDamage(12) end
+				end
+			end)
+		]]
+		s.Parent = barrier
+		barrier:SetAttribute("Team", xDir>0 and "Red" or "Blue")
+	end
+	-- SpawnLocation
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Size = Vector3.new(8,1,8)
+	spawn.CFrame = ORIGIN * CFrame.new(xDir*BASE_OFFSET,3,0)
+	spawn.Anchored = true
+	spawn.Neutral = false
+	spawn.BrickColor = BrickColor.new(xDir>0 and "Bright red" or "Bright blue")
+	spawn.Name = name.."_Spawn"
+	spawn.Parent = folder
+	return folder
+end
+
+local baseRed = createBase("Base_Red", 1, Color3.fromRGB(255,80,80))
+local baseBlue = createBase("Base_Blue", -1, Color3.fromRGB(80,120,255))
+
+-- Puente superior (frágil)
+local BRIDGE = Instance.new("Folder"); BRIDGE.Name = "FragileBridge"; BRIDGE.Parent = MAP
+local plankCount = 10
+for i=1,plankCount do
+	local w = 4
+	local plank = createPart({Name="Plank_"..i, Size=Vector3.new(w,1,6), CFrame=ORIGIN * CFrame.new(-20 + (i-1)*4, 12, 0), Material=Enum.Material.Metal, Color=Color3.fromRGB(200,200,200), Parent=BRIDGE})
+	local scriptFrag = Instance.new("Script")
+	scriptFrag.Source = [[
+		local plank = script.Parent
+		local dropping = false
+		plank.Touched:Connect(function(hit)
+			if dropping then return end
+			local hum = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
+			if hum then
+				dropping = true
+				task.wait(0.4)
+				local originalCF = plank.CFrame
+				plank.Anchored = false
+				Debris:AddItem(plank, 6)
+				task.spawn(function()
+					task.wait(4)
+					if plank and plank.Parent then plank:Destroy() end
+					local newP = Instance.new("Part")
+					newP.Size = Vector3.new(]]..w..[[,1,6)
+					newP.Material = Enum.Material.Metal
+					newP.Color = Color3.fromRGB(200,200,200)
+					newP.Anchored = true
+					newP.CFrame = originalCF
+					newP.Name = plank.Name
+					newP.Parent = plank.Parent
+					local s = script:Clone(); s.Parent = newP; s.Disabled = false
+				end)
+			end
+		end)
+	]]
+	scriptFrag.Parent = plank
+end
+
+-- Rail superior (barandilla/pasadizo largo)
+createPart({Name="TopRail", Size=Vector3.new(140,1,2), CFrame=ORIGIN * CFrame.new(0,16,0), Material=Enum.Material.Metal, Color=Color3.fromRGB(150,  
