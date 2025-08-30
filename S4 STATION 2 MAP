@@ -198,4 +198,150 @@ for i=1,plankCount do
 end
 
 -- Rail superior (barandilla/pasadizo largo)
-createPart({Name="TopRail", Size=Vector3.new(140,1,2), CFrame=ORIGIN * CFrame.new(0,16,0), Material=Enum.Material.Metal, Color=Color3.fromRGB(150,  
+createPart({Name="TopRail", Size=Vector3.new(140,1,2), CFrame=ORIGIN * CFrame.new(0,16,0), Material=Enum.Material.Metal, Color=Color3.fromRGB(150,150,150), Parent=MAP})
+
+-- Zonas de gol (invisibles)
+local GOALS = Instance.new("Folder"); GOALS.Name = "Goals"; GOALS.Parent = MAP
+local goalBlue = createPart({Name="Goal_Blue", Size=Vector3.new(10,10,14), CFrame=ORIGIN * CFrame.new(BASE_OFFSET,5,0), Transparency=1, Parent=GOALS}) -- anotar aquí da punto a Red
+local goalRed  = createPart({Name="Goal_Red",  Size=Vector3.new(10,10,14), CFrame=ORIGIN * CFrame.new(-BASE_OFFSET,5,0), Transparency=1, Parent=GOALS}) -- anotar aquí da punto a Blue
+
+goalBlue.CanQuery = true; goalRed.CanQuery = true
+
+-- =========================
+-- \u{1F3BE} Touchdown / Fumbi
+-- =========================
+local FOLDER_GAME = Instance.new("Folder"); FOLDER_GAME.Name = "TouchdownRuntime"; FOLDER_GAME.Parent = workspace
+
+local FUMBI_SPAWN_CF = ORIGIN * CFrame.new(0,7,0)
+local FUMBI
+local CARRIER -- Player instance currently carrying
+
+local function createFumbi()
+	local ball = Instance.new("Part")
+	ball.Shape = Enum.PartType.Ball
+	ball.Size = Vector3.new(2.6,2.6,2.6)
+	ball.Material = Enum.Material.Neon
+	ball.Color = Color3.fromRGB(245, 205, 60)
+	ball.Anchored = false
+	ball.CanCollide = true
+	ball.CFrame = FUMBI_SPAWN_CF
+	ball.Name = "Fumbi"
+	ball.Parent = FOLDER_GAME
+	local att = Instance.new("Attachment", ball)
+	local highlight = Instance.new("Highlight")
+	highlight.FillTransparency = 0.7
+	highlight.OutlineTransparency = 0
+	highlight.Parent = ball
+	return ball
+end
+
+local function dropFumbi()
+	if not FUMBI then return end
+	-- Quitar weld si existe
+	local weld = FUMBI:FindFirstChild("FumbiWeld")
+	if weld then weld:Destroy() end
+	FUMBI.Anchored = false
+	FUMBI.CanCollide = true
+	CARRIER = nil
+end
+
+local function resetFumbi()
+	dropFumbi()
+	if FUMBI then FUMBI:Destroy() end
+	FUMBI = createFumbi()
+end
+
+-- Crear Fumbi al inicio
+FUMBI = createFumbi()
+
+-- Pickup behavior
+local function onFumbiTouched(hit)
+	if CARRIER then return end
+	local hum = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
+	local plr = hum and Players:GetPlayerFromCharacter(hit.Parent)
+	if hum and plr then
+		-- soldar a HumanoidRootPart
+		local hrp = hit.Parent:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+		local weld = Instance.new("WeldConstraint")
+		weld.Name = "FumbiWeld"
+		weld.Part0 = FUMBI
+		weld.Part1 = hrp
+		weld.Parent = FUMBI
+		FUMBI.Anchored = false
+		FUMBI.CanCollide = false
+		FUMBI.CFrame = hrp.CFrame * CFrame.new(0, 2.5, 0)
+		CARRIER = plr
+		-- soltar al morir
+		hum.Died:Connect(function()
+			if CARRIER == plr then dropFumbi() end
+		end)
+		-- soltar si se teleporta
+		task.delay(60, function()
+			-- auto reset si alguien se la guarda demasiado
+			if CARRIER == plr then resetFumbi() end
+		end)
+	end
+end
+
+FUMBI.Touched:Connect(onFumbiTouched)
+
+-- Scoring
+local function scoreFor(teamName, scorer)
+	-- sumar al equipo y al jugador
+	if scorer then
+		ensureLeaderstats(scorer)
+		scorer.leaderstats.Touchdowns.Value += 1
+		scorer.leaderstats.Score.Value += 7
+	end
+	-- Mensaje
+	print((teamName=="Red" and "\u{1F534}" or "\u{1F535}") .. " Touchdown de " .. (scorer and scorer.Name or "?") .. " para " .. teamName)
+	-- Reset ronda
+	resetFumbi()
+	-- reset jugadores a sus bases
+	for _,plr in ipairs(Players:GetPlayers()) do
+		if plr.Character and plr.Character:FindFirstChild("HumanoidRootPart") then
+			local xDir = (plr.Team and plr.Team.Name=="Red") and 1 or -1
+			plr.Character.HumanoidRootPart.CFrame = ORIGIN * CFrame.new(xDir*BASE_OFFSET, 6, 0)
+		end
+	end
+end
+
+local function bindGoal(goalPart, teamAward)
+	goalPart.Touched:Connect(function(hit)
+		local hum = hit.Parent and hit.Parent:FindFirstChild("Humanoid")
+		local plr = hum and Players:GetPlayerFromCharacter(hit.Parent)
+		if not (hum and plr) then return end
+		if not CARRIER or CARRIER ~= plr then return end
+		-- el portador entró en la zona de gol
+		scoreFor(teamAward, plr)
+	end)
+end
+
+bindGoal(goalBlue, "Red")
+bindGoal(goalRed, "Blue")
+
+-- Watchdogs: si la Fumbi cae del mundo, reponer
+RunService.Heartbeat:Connect(function()
+	if FUMBI and FUMBI:IsDescendantOf(workspace) then
+		if FUMBI.Position.Y < -20 then
+			resetFumbi()
+		end
+	else
+		resetFumbi()
+	end
+end)
+
+-- =========================
+-- \u{1F6B6}\u{200D}\u{2642}\u{FE0F} Calidad de vida (opcionales sencillos)
+-- =========================
+-- Boost de salto leve para recordar la movilidad de S4 (server-side safe)
+Players.PlayerAdded:Connect(function(plr)
+	plr.CharacterAdded:Connect(function(char)
+		local hum = char:WaitForChild("Humanoid")
+		hum.JumpPower = 60 -- leve boost (por defecto ~50)
+		hum.WalkSpeed = 18 -- leve boost (por defecto 16)
+	end)
+end)
+
+print("\n[Station‑2] Mapa y modo Touchdown desplegados. Disfruta! ✅\n")
